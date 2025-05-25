@@ -2,7 +2,6 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use serde::{Deserialize, Serialize};
 
 use crate::{
     spec::Specification,
@@ -11,6 +10,7 @@ use crate::{
 
 mod spec;
 mod subcommands;
+mod proto_gen;
 
 mod built_info {
     include!(concat!(env!("OUT_DIR"), "/built.rs"));
@@ -25,7 +25,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Subcommands {
-    #[clap(about = "Generate Rust code")]
+    #[clap(about = "Generate proto files")]
     Generate(Generate),
     #[clap(about = "Print the spec to standard output")]
     Print(Print),
@@ -35,7 +35,6 @@ enum Subcommands {
 struct GenerationProfile {
     version: SpecVersion,
     raw_specs: RawSpecs,
-    options: ProfileOptions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,66 +55,6 @@ struct RawSpecs {
     write: &'static str,
     trace: &'static str,
     ws: Option<&'static str>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProfileOptions {
-    flatten_options: FlattenOption,
-    ignore_types: Vec<String>,
-    allow_unknown_field_types: Vec<String>,
-    fixed_field_types: FixedFieldsOptions,
-    arc_wrapped_types: ArcWrappingOptions,
-    additional_derives_types: AdditionalDerivesOptions,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FixedFieldsOptions {
-    fixed_field_types: Vec<RustTypeWithFixedFields>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ArcWrappingOptions {
-    arc_wrapped_types: Vec<RustTypeWithArcWrappedFields>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct AdditionalDerivesOptions {
-    additional_derives_types: Vec<RustTypesWithAdditionalDerives>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RustTypeWithFixedFields {
-    name: String,
-    fields: Vec<FixedField>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RustTypeWithArcWrappedFields {
-    name: String,
-    fields: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RustTypesWithAdditionalDerives {
-    name: String,
-    derives: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FixedField {
-    name: String,
-    value: String,
-    is_query_version: bool,
-    #[serde(default)]
-    must_present_in_deser: bool,
-}
-
-#[allow(unused)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum FlattenOption {
-    All,
-    Selected(Vec<String>),
 }
 
 impl FromStr for SpecVersion {
@@ -226,45 +165,6 @@ impl RawSpecs {
     }
 }
 
-impl FixedFieldsOptions {
-    fn find_fixed_field(&self, type_name: &str, field_name: &str) -> Option<FixedField> {
-        self.fixed_field_types.iter().find_map(|item| {
-            if item.name == type_name {
-                item.fields
-                    .iter()
-                    .find(|field| field.name == field_name)
-                    .cloned()
-            } else {
-                None
-            }
-        })
-    }
-}
-
-impl ArcWrappingOptions {
-    fn in_field_wrapped(&self, type_name: &str, field_name: &str) -> bool {
-        self.arc_wrapped_types.iter().any(|item| {
-            if item.name == type_name {
-                item.fields.iter().any(|field| field == field_name)
-            } else {
-                false
-            }
-        })
-    }
-}
-
-impl AdditionalDerivesOptions {
-    fn find_additional_derives(&self, type_name: &str) -> Option<Vec<String>> {
-        self.additional_derives_types.iter().find_map(|item| {
-            if item.name == type_name {
-                Some(item.derives.clone())
-            } else {
-                None
-            }
-        })
-    }
-}
-
 fn main() {
     let cli = Cli::parse();
 
@@ -277,8 +177,6 @@ fn main() {
                 trace: include_str!("./specs/0.1.0/starknet_trace_api_openrpc.json"),
                 ws: None,
             },
-            options: serde_json::from_str(include_str!("./profiles/0.1.0.json"))
-                .expect("Unable to parse profile options"),
         },
         GenerationProfile {
             version: SpecVersion::V0_2_1,
@@ -288,8 +186,6 @@ fn main() {
                 trace: include_str!("./specs/0.2.1/starknet_trace_api_openrpc.json"),
                 ws: None,
             },
-            options: serde_json::from_str(include_str!("./profiles/0.2.1.json"))
-                .expect("Unable to parse profile options"),
         },
         GenerationProfile {
             version: SpecVersion::V0_3_0,
@@ -299,8 +195,6 @@ fn main() {
                 trace: include_str!("./specs/0.3.0/starknet_trace_api_openrpc.json"),
                 ws: None,
             },
-            options: serde_json::from_str(include_str!("./profiles/0.3.0.json"))
-                .expect("Unable to parse profile options"),
         },
         GenerationProfile {
             version: SpecVersion::V0_4_0,
@@ -310,8 +204,6 @@ fn main() {
                 trace: include_str!("./specs/0.4.0/starknet_trace_api_openrpc.json"),
                 ws: None,
             },
-            options: serde_json::from_str(include_str!("./profiles/0.4.0.json"))
-                .expect("Unable to parse profile options"),
         },
         GenerationProfile {
             version: SpecVersion::V0_5_1,
@@ -321,8 +213,6 @@ fn main() {
                 trace: include_str!("./specs/0.5.1/starknet_trace_api_openrpc.json"),
                 ws: None,
             },
-            options: serde_json::from_str(include_str!("./profiles/0.5.1.json"))
-                .expect("Unable to parse profile options"),
         },
         GenerationProfile {
             version: SpecVersion::V0_6_0,
@@ -332,8 +222,6 @@ fn main() {
                 trace: include_str!("./specs/0.6.0/starknet_trace_api_openrpc.json"),
                 ws: None,
             },
-            options: serde_json::from_str(include_str!("./profiles/0.6.0.json"))
-                .expect("Unable to parse profile options"),
         },
         GenerationProfile {
             version: SpecVersion::V0_7_1,
@@ -343,8 +231,6 @@ fn main() {
                 trace: include_str!("./specs/0.7.1/starknet_trace_api_openrpc.json"),
                 ws: None,
             },
-            options: serde_json::from_str(include_str!("./profiles/0.7.1.json"))
-                .expect("Unable to parse profile options"),
         },
         GenerationProfile {
             version: SpecVersion::V0_8_1,
@@ -354,8 +240,6 @@ fn main() {
                 trace: include_str!("./specs/0.8.1/starknet_trace_api_openrpc.json"),
                 ws: Some(include_str!("./specs/0.8.1/starknet_ws_api.json")),
             },
-            options: serde_json::from_str(include_str!("./profiles/0.8.1.json"))
-                .expect("Unable to parse profile options"),
         },
     ];
 

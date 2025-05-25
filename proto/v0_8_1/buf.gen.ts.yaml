@@ -1,0 +1,17 @@
+version: v1
+plugins:
+  - plugin: buf.build/protocolbuffers/js
+    out: gen/js
+    opt:
+      - import_style=commonjs
+      - binary
+  - plugin: buf.build/grpc/web
+    out: gen/js
+    opt:
+      - import_style=typescript
+      - mode=grpcwebtext
+  - plugin: buf.build/bufbuild/es
+    out: gen/ts
+    opt:
+      - target=ts
+      - js_import_style=module

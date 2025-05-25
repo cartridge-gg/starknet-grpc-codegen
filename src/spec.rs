@@ -82,7 +82,7 @@ pub enum Schema {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct Reference {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -93,6 +93,9 @@ pub struct Reference {
     pub description: Option<String>,
     #[serde(rename = "$ref")]
     pub ref_field: String,
+    // Allow additional fields that we don't need to parse
+    #[serde(flatten)]
+    pub additional_fields: std::collections::HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -211,62 +214,66 @@ pub struct Error {
 }
 
 impl Schema {
+    #[allow(dead_code)]
     pub fn title(&self) -> Option<&String> {
         match self {
-            Self::Ref(schema) => schema.title.as_ref(),
-            Self::OneOf(schema) => schema.title.as_ref(),
-            Self::AllOf(schema) => schema.title.as_ref(),
-            Self::Primitive(schema) => schema.title(),
+            Schema::Primitive(primitive) => primitive.title(),
+            Schema::Ref(reference) => reference.title.as_ref(),
+            Schema::OneOf(oneof) => oneof.title.as_ref(),
+            Schema::AllOf(allof) => allof.title.as_ref(),
         }
     }
 
     pub fn description(&self) -> Option<&String> {
         match self {
-            Self::Ref(schema) => schema.description.as_ref(),
-            Self::OneOf(schema) => schema.description.as_ref(),
-            Self::AllOf(schema) => schema.description.as_ref(),
-            Self::Primitive(schema) => schema.description(),
+            Schema::Primitive(primitive) => primitive.description(),
+            Schema::Ref(reference) => reference.description.as_ref(),
+            Schema::OneOf(oneof) => oneof.description.as_ref(),
+            Schema::AllOf(allof) => allof.description.as_ref(),
         }
     }
 
+    #[allow(dead_code)]
     pub fn summary(&self) -> Option<&String> {
         match self {
-            Self::Ref(_) => None,
-            Self::OneOf(_) => None,
-            Self::AllOf(_) => None,
-            Self::Primitive(schema) => schema.summary(),
+            Schema::Primitive(primitive) => primitive.summary(),
+            Schema::Ref(_) => None,
+            Schema::OneOf(_) => None,
+            Schema::AllOf(_) => None,
         }
     }
 }
 
 impl Primitive {
+    #[allow(dead_code)]
     pub fn title(&self) -> Option<&String> {
         match self {
-            Self::Array(schema) => schema.title.as_ref(),
-            Self::Boolean(schema) => schema.title.as_ref(),
-            Self::Integer(schema) => schema.title.as_ref(),
-            Self::Object(schema) => schema.title.as_ref(),
-            Self::String(schema) => schema.title.as_ref(),
+            Primitive::String(string_primitive) => string_primitive.title.as_ref(),
+            Primitive::Integer(integer_primitive) => integer_primitive.title.as_ref(),
+            Primitive::Boolean(boolean_primitive) => boolean_primitive.title.as_ref(),
+            Primitive::Array(array_primitive) => array_primitive.title.as_ref(),
+            Primitive::Object(object_primitive) => object_primitive.title.as_ref(),
         }
     }
 
     pub fn description(&self) -> Option<&String> {
         match self {
-            Self::Array(schema) => schema.description.as_ref(),
-            Self::Boolean(schema) => schema.description.as_ref(),
-            Self::Integer(schema) => schema.description.as_ref(),
-            Self::Object(schema) => schema.description.as_ref(),
-            Self::String(schema) => schema.description.as_ref(),
+            Primitive::String(string_primitive) => string_primitive.description.as_ref(),
+            Primitive::Integer(integer_primitive) => integer_primitive.description.as_ref(),
+            Primitive::Boolean(boolean_primitive) => boolean_primitive.description.as_ref(),
+            Primitive::Array(array_primitive) => array_primitive.description.as_ref(),
+            Primitive::Object(object_primitive) => object_primitive.description.as_ref(),
         }
     }
 
+    #[allow(dead_code)]
     pub fn summary(&self) -> Option<&String> {
         match self {
-            Self::Array(_) => None,
-            Self::Boolean(_) => None,
-            Self::Integer(_) => None,
-            Self::Object(schema) => schema.summary.as_ref(),
-            Self::String(_) => None,
+            Primitive::String(_) => None,
+            Primitive::Integer(_) => None,
+            Primitive::Boolean(_) => None,
+            Primitive::Array(_) => None,
+            Primitive::Object(object_primitive) => object_primitive.summary.as_ref(),
         }
     }
 }

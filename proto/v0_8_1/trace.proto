@@ -1,0 +1,32 @@
+// AUTO-GENERATED PROTOBUF FILE. DO NOT EDIT
+// Generated from Starknet JSON-RPC specification
+// 
+// Generation tool: https://github.com/cartridge-gg/starknet-grpc-codegen
+// Generated with commit: 122730c1551d2582a99875b3b982bea8085000f8
+// Specification version: 0.8.1
+// Generated file: trace.proto
+// 
+// This file contains protobuf definitions with JSON marshalling support.
+// Field names preserve the exact JSON structure using json_name options.
+
+syntax = "proto3";
+
+package starknet.v0_8_1.trace;
+
+import "v0_8_1/common.proto";
+
+option java_multiple_files = true;
+option java_outer_classname = "StarknetProto";
+option java_package = "com.starknet_v0_8_1_trace";
+option go_package = "github.com/cartridge-gg/starknet-grpc-codegen/go/starknet/v0_8_1/trace";
+option csharp_namespace = "Starknet.Starknet.V0_8_1.Trace";;
+option php_namespace = "Starknet\\Starknet\\V0_8_1\\Trace";;
+
+// Generated gRPC service for Starknet StarknetTraceService
+service StarknetTraceService {
+  // Returns the execution trace of the transaction designated by the input hash
+  rpc TraceTransaction(TraceTransactionRequest) returns (TraceTransactionResponse);
+  // Returns the execution traces of all transactions included in the given block
+  rpc TraceBlockTransactions(TraceBlockTransactionsRequest) returns (TraceBlockTransactionsResponse);
+}
+

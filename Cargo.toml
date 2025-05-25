@@ -1,10 +1,10 @@
 [package]
-name = "starknet-jsonrpc-codegen"
+name = "starknet-grpc-codegen"
 version = "0.1.0"
-authors = ["Jonathan LEI <me@xjonathan.dev>"]
+authors = ["Tarrence van As <tarrence@cartridge.gg>"]
 edition = "2021"
 description = """
-Tool for generating the Starknet JSON-RPC code used in starknet-rs
+Tool for generating a GRPC interface from the Starknet JSON-RPC
 """
 build = "src/build.rs"
 
@@ -19,3 +19,7 @@ serde_json = "1.0.96"
 
 [build-dependencies]
 built = { version = "0.6.0", features = ["git2"] }
+
+[dev-dependencies]
+tempfile = "3.5.0"
+pretty_assertions = "1.3.0"
