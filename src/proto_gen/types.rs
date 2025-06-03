@@ -3,8 +3,8 @@ use std::fmt;
 
 use anyhow::Result;
 
+use crate::proto_gen::{writer::*, ProtoConfig};
 use crate::spec::*;
-use crate::proto_gen::{ProtoConfig, writer::*};
 
 /// Protobuf message definition
 #[derive(Debug, Clone)]
@@ -119,7 +119,10 @@ pub struct TypeResolver {
 }
 
 // Type aliases to reduce complexity
-type OrganizedTypes = ((Vec<ProtoMessage>, Vec<ProtoEnum>), HashMap<String, Vec<ProtoMessage>>);
+type OrganizedTypes = (
+    (Vec<ProtoMessage>, Vec<ProtoEnum>),
+    HashMap<String, Vec<ProtoMessage>>,
+);
 
 impl TypeResolver {
     pub fn new(config: &ProtoConfig) -> Self {
@@ -142,7 +145,10 @@ impl TypeResolver {
             self.resolve_schema_type(name, schema)?;
         }
 
-        // Third pass: organize types by service
+        // Third pass: add common wrapper types that are needed for oneOf variants
+        self.add_common_wrapper_types()?;
+
+        // Fourth pass: organize types by service
         let (common_types, service_types) = self.organize_types_by_service(specs)?;
         
         Ok(TypeResolution {
@@ -159,12 +165,46 @@ impl TypeResolver {
     fn register_type_name(&mut self, name: &str) {
         // Register the type name for reference resolution
         let _proto_name = to_proto_type_name(name);
-        self.type_dependencies.insert(name.to_string(), HashSet::new());
+        self.type_dependencies
+            .insert(name.to_string(), HashSet::new());
     }
 
     fn resolve_schema_type(&mut self, name: &str, schema: &Schema) -> Result<()> {
+        // Skip creating wrapper messages for type aliases that map to primitives
+        if matches!(
+            name,
+            "FELT"
+                | "TXN_HASH"
+                | "BLOCK_HASH"
+                | "ADDRESS"
+                | "CLASS_HASH"
+                | "STORAGE_KEY"
+                | "HASH_256"
+                | "BLOCK_NUMBER"
+                | "NUM_AS_HEX"
+                | "L1_TXN_HASH"
+                | "u64"
+                | "u128"
+                | "ETH_ADDRESS"
+                | "Object"
+                | "NestedCall"
+                | "NESTED_CALL"
+                | "BroadcastedInvokeTxn"
+                | "BROADCASTED_INVOKE_TXN"
+                | "BROADCASTED_INVOKE_TXN_V3"
+                | "BroadcastedDeclareTxn"
+                | "BROADCASTED_DECLARE_TXN"
+                | "BROADCASTED_DECLARE_TXN_V3"
+                | "BroadcastedDeployAccountTxn"
+                | "BROADCASTED_DEPLOY_ACCOUNT_TXN"
+                | "BROADCASTED_DEPLOY_ACCOUNT_TXN_V3"
+                | "NODE_HASH_TO_NODE_MAPPING"
+        ) {
+            return Ok(());
+        }
+
         let proto_name = to_proto_type_name(name);
-        
+
         match schema {
             Schema::Primitive(Primitive::Object(obj)) => {
                 let message = self.convert_object_to_message(&proto_name, obj)?;
@@ -172,7 +212,11 @@ impl TypeResolver {
             }
             Schema::Primitive(Primitive::String(str_primitive)) => {
                 if let Some(enum_values) = &str_primitive.r#enum {
-                    let proto_enum = self.convert_string_enum_to_enum(&proto_name, enum_values, str_primitive.description.as_deref())?;
+                    let proto_enum = self.convert_string_enum_to_enum(
+                        &proto_name,
+                        enum_values,
+                        str_primitive.description.as_deref(),
+                    )?;
                     self.resolved_enums.insert(name.to_string(), proto_enum);
                 } else {
                     // String primitive without enum - create alias or wrapper
@@ -258,7 +302,35 @@ impl TypeResolver {
 
         for (i, variant_schema) in oneof.one_of.iter().enumerate() {
             let variant_name = format!("variant_{}", i + 1);
-            let field_type = self.schema_to_proto_field_type(variant_schema)?;
+            
+            // Handle specific known patterns for block IDs and similar types
+            let field_type = match variant_schema {
+                Schema::Primitive(Primitive::Object(obj)) if obj.properties.len() == 1 => {
+                    let (prop_name, _) = obj.properties.iter().next().unwrap();
+                    match prop_name.as_str() {
+                        "block_hash" => ProtoFieldType::Message("BlockHashWrapper".to_string()),
+                        "block_number" => ProtoFieldType::Message("BlockNumberWrapper".to_string()),
+                        "execution_status" => {
+                            // Check if this is the succeeded or reverted variant
+                            if obj.required.contains(&"revert_reason".to_string()) {
+                                ProtoFieldType::Message("ExecutionReverted".to_string())
+                            } else {
+                                ProtoFieldType::Message("ExecutionSucceeded".to_string())
+                            }
+                        }
+                        _ => self.schema_to_proto_field_type(variant_schema)?
+                    }
+                }
+                Schema::Primitive(Primitive::Object(obj)) if obj.properties.len() == 2 => {
+                    // Check for ExecutionReverted pattern: { "execution_status": "REVERTED", "revert_reason": "..." }
+                    if obj.properties.contains_key("execution_status") && obj.properties.contains_key("revert_reason") {
+                        ProtoFieldType::Message("ExecutionReverted".to_string())
+                    } else {
+                        self.schema_to_proto_field_type(variant_schema)?
+                    }
+                }
+                _ => self.schema_to_proto_field_type(variant_schema)?
+            };
 
             oneof_fields.push(ProtoField {
                 name: variant_name,
@@ -322,7 +394,7 @@ impl TypeResolver {
                     // Handle reference in allOf by creating a field of that type
                     let ref_name = reference.name();
                     let field_type = ProtoFieldType::Message(to_proto_type_name(ref_name));
-                    
+
                     all_fields.push(ProtoField {
                         name: to_proto_name(ref_name),
                         field_type,
@@ -353,11 +425,30 @@ impl TypeResolver {
         })
     }
 
-    fn convert_string_enum_to_enum(&self, name: &str, values: &[String], description: Option<&str>) -> Result<ProtoEnum> {
+    fn convert_string_enum_to_enum(
+        &self,
+        name: &str,
+        values: &[String],
+        description: Option<&str>,
+    ) -> Result<ProtoEnum> {
         let mut enum_values = Vec::new();
-        
+
+        // Convert enum name to prefix format (e.g., "TxnStatus" -> "TXN_STATUS_")
+        let prefix = name
+            .chars()
+            .enumerate()
+            .map(|(i, c)| {
+                if i > 0 && c.is_uppercase() {
+                    format!("_{}", c)
+                } else {
+                    c.to_string().to_uppercase()
+                }
+            })
+            .collect::<String>()
+            + "_";
+
         for (i, value) in values.iter().enumerate() {
-            let enum_value_name = value.to_uppercase().replace("-", "_");
+            let enum_value_name = prefix.clone() + &value.to_uppercase().replace("-", "_");
             enum_values.push(ProtoEnumValue {
                 name: enum_value_name,
                 number: i as i32,
@@ -374,7 +465,7 @@ impl TypeResolver {
 
     fn convert_primitive_to_wrapper(&self, name: &str, schema: &Schema) -> Result<ProtoMessage> {
         let field_type = self.schema_to_proto_field_type(schema)?;
-        
+
         Ok(ProtoMessage {
             name: name.to_string(),
             fields: vec![ProtoField {
@@ -403,26 +494,180 @@ impl TypeResolver {
         // For now, put all types in common
         let common_messages: Vec<ProtoMessage> = self.resolved_types.values().cloned().collect();
         let common_enums: Vec<ProtoEnum> = self.resolved_enums.values().cloned().collect();
-        
+
         let service_types = HashMap::new();
-        
+
         Ok(((common_messages, common_enums), service_types))
     }
 
     fn build_type_map(&self) -> HashMap<String, String> {
         let mut type_map = HashMap::new();
-        
+
         for json_name in self.resolved_types.keys() {
             let proto_name = to_proto_type_name(json_name);
             type_map.insert(json_name.clone(), proto_name);
         }
-        
+
         for json_name in self.resolved_enums.keys() {
             let proto_name = to_proto_type_name(json_name);
             type_map.insert(json_name.clone(), proto_name);
         }
-        
+
         type_map
+    }
+
+    fn add_common_wrapper_types(&mut self) -> Result<()> {
+        // Create BlockHashWrapper for { "block_hash": "..." }
+        let block_hash_wrapper = ProtoMessage {
+            name: "BlockHashWrapper".to_string(),
+            fields: vec![ProtoField {
+                name: "block_hash".to_string(),
+                field_type: ProtoFieldType::String,
+                number: 1,
+                json_name: Some("block_hash".to_string()),
+                comment: Some("Block hash".to_string()),
+                optional: false,
+                repeated: false,
+                oneof_name: None,
+            }],
+            nested_messages: vec![],
+            nested_enums: vec![],
+            oneofs: vec![],
+            comment: Some("Wrapper for block hash".to_string()),
+            options: vec![],
+        };
+        self.resolved_types.insert("BlockHashWrapper".to_string(), block_hash_wrapper);
+
+        // Create BlockNumberWrapper for { "block_number": 123 }
+        let block_number_wrapper = ProtoMessage {
+            name: "BlockNumberWrapper".to_string(),
+            fields: vec![ProtoField {
+                name: "block_number".to_string(),
+                field_type: ProtoFieldType::Uint64,
+                number: 1,
+                json_name: Some("block_number".to_string()),
+                comment: Some("Block number".to_string()),
+                optional: false,
+                repeated: false,
+                oneof_name: None,
+            }],
+            nested_messages: vec![],
+            nested_enums: vec![],
+            oneofs: vec![],
+            comment: Some("Wrapper for block number".to_string()),
+            options: vec![],
+        };
+        self.resolved_types.insert("BlockNumberWrapper".to_string(), block_number_wrapper);
+
+        // Create ExecutionSucceeded for { "execution_status": "SUCCEEDED" }
+        let execution_succeeded = ProtoMessage {
+            name: "ExecutionSucceeded".to_string(),
+            fields: vec![ProtoField {
+                name: "execution_status".to_string(),
+                field_type: ProtoFieldType::String,
+                number: 1,
+                json_name: Some("execution_status".to_string()),
+                comment: Some("The execution status of the transaction".to_string()),
+                optional: false,
+                repeated: false,
+                oneof_name: None,
+            }],
+            nested_messages: vec![],
+            nested_enums: vec![],
+            oneofs: vec![],
+            comment: Some("Common properties for a transaction receipt that was executed successfully".to_string()),
+            options: vec![],
+        };
+        self.resolved_types.insert("ExecutionSucceeded".to_string(), execution_succeeded);
+
+        // Create ExecutionReverted for { "execution_status": "REVERTED", "revert_reason": "..." }
+        let execution_reverted = ProtoMessage {
+            name: "ExecutionReverted".to_string(),
+            fields: vec![
+                ProtoField {
+                    name: "execution_status".to_string(),
+                    field_type: ProtoFieldType::String,
+                    number: 1,
+                    json_name: Some("execution_status".to_string()),
+                    comment: Some("The execution status of the transaction".to_string()),
+                    optional: false,
+                    repeated: false,
+                    oneof_name: None,
+                },
+                ProtoField {
+                    name: "revert_reason".to_string(),
+                    field_type: ProtoFieldType::String,
+                    number: 2,
+                    json_name: Some("revert_reason".to_string()),
+                    comment: Some("the revert reason for the failed execution".to_string()),
+                    optional: false,
+                    repeated: false,
+                    oneof_name: None,
+                },
+            ],
+            nested_messages: vec![],
+            nested_enums: vec![],
+            oneofs: vec![],
+            comment: Some("Common properties for a transaction receipt that was reverted".to_string()),
+            options: vec![],
+        };
+        self.resolved_types.insert("ExecutionReverted".to_string(), execution_reverted);
+
+        // Create NodeHashToNodeMappingItem for the array items
+        let node_mapping_item = ProtoMessage {
+            name: "NodeHashToNodeMappingItem".to_string(),
+            fields: vec![
+                ProtoField {
+                    name: "node_hash".to_string(),
+                    field_type: ProtoFieldType::String,
+                    number: 1,
+                    json_name: Some("node_hash".to_string()),
+                    comment: Some("The hash of the node".to_string()),
+                    optional: false,
+                    repeated: false,
+                    oneof_name: None,
+                },
+                ProtoField {
+                    name: "node".to_string(),
+                    field_type: ProtoFieldType::Message("MerkleNode".to_string()),
+                    number: 2,
+                    json_name: Some("node".to_string()),
+                    comment: Some("The node data".to_string()),
+                    optional: false,
+                    repeated: false,
+                    oneof_name: None,
+                },
+            ],
+            nested_messages: vec![],
+            nested_enums: vec![],
+            oneofs: vec![],
+            comment: Some("A single node hash to node mapping".to_string()),
+            options: vec![],
+        };
+        self.resolved_types.insert("NodeHashToNodeMappingItem".to_string(), node_mapping_item);
+
+        // Create a generic Object message type for remaining Object references
+        let generic_object = ProtoMessage {
+            name: "Object".to_string(),
+            fields: vec![ProtoField {
+                name: "data".to_string(),
+                field_type: ProtoFieldType::String,
+                number: 1,
+                json_name: Some("data".to_string()),
+                comment: Some("Generic object data as JSON string".to_string()),
+                optional: false,
+                repeated: false,
+                oneof_name: None,
+            }],
+            nested_messages: vec![],
+            nested_enums: vec![],
+            oneofs: vec![],
+            comment: Some("Generic object type for untyped data".to_string()),
+            options: vec![],
+        };
+        self.resolved_types.insert("Object".to_string(), generic_object);
+
+        Ok(())
     }
 }
 
@@ -441,10 +686,61 @@ fn schema_to_proto_field_type_impl(schema: &Schema) -> Result<ProtoFieldType> {
         },
         Schema::Ref(reference) => {
             let ref_name = reference.name();
-            let proto_type_name = to_proto_type_name(ref_name);
-            Ok(ProtoFieldType::Message(proto_type_name))
+
+            // Handle common type aliases that should map to primitive types
+            match ref_name {
+                "FELT" | "TXN_HASH" | "BLOCK_HASH" | "ADDRESS" | "CLASS_HASH" | "STORAGE_KEY"
+                | "HASH_256" => Ok(ProtoFieldType::String),
+                "BLOCK_NUMBER" | "NUM_AS_HEX" | "L1_TXN_HASH" => Ok(ProtoFieldType::Uint64),
+                "u64" => Ok(ProtoFieldType::Uint64),
+                "u128" => {
+                    Ok(ProtoFieldType::String) // Use string for large integers
+                }
+                "ETH_ADDRESS" => Ok(ProtoFieldType::String),
+                // Handle generic object types
+                "Object" => {
+                    // Try to determine what kind of object this should be based on context
+                    // For now, we'll use a generic Object type, but this should be improved
+                    Ok(ProtoFieldType::Message("Object".to_string()))
+                }
+                // Handle cross-service type references
+                "NestedCall" | "NESTED_CALL" => {
+                    Ok(ProtoFieldType::Message("FunctionInvocation".to_string()))
+                    // NestedCall is an alias for FunctionInvocation
+                }
+                "BroadcastedInvokeTxn" | "BROADCASTED_INVOKE_TXN" | "BROADCASTED_INVOKE_TXN_V3" => {
+                    Ok(ProtoFieldType::Message("InvokeTxnV3Content".to_string()))
+                    // Map to the actual content type
+                }
+                "BroadcastedDeclareTxn"
+                | "BROADCASTED_DECLARE_TXN"
+                | "BROADCASTED_DECLARE_TXN_V3" => {
+                    Ok(ProtoFieldType::Message("DeclareTxnV3Content".to_string()))
+                    // Map to the actual content type
+                }
+                "BroadcastedDeployAccountTxn"
+                | "BROADCASTED_DEPLOY_ACCOUNT_TXN"
+                | "BROADCASTED_DEPLOY_ACCOUNT_TXN_V3" => {
+                    Ok(ProtoFieldType::Message(
+                        "DeployAccountTxnV3Content".to_string(),
+                    )) // Map to the actual content type
+                }
+                "NODE_HASH_TO_NODE_MAPPING" => {
+                    // This should be an array of NodeHashToNodeMappingItem
+                    Ok(ProtoFieldType::Message("NodeHashToNodeMappingItem".to_string()))
+                }
+                // For other references, treat as message types
+                _ => {
+                    let proto_type_name = to_proto_type_name(ref_name);
+                    Ok(ProtoFieldType::Message(proto_type_name))
+                }
+            }
         }
-        Schema::OneOf(_) => Ok(ProtoFieldType::Any),
+        Schema::OneOf(_) => {
+            // OneOf should generate a proper union message type based on the context
+            // For now, we'll use a generic message type
+            Ok(ProtoFieldType::Message("Object".to_string()))
+        }
         Schema::AllOf(_) => Ok(ProtoFieldType::Message("AllOf".to_string())),
     }
 }
@@ -455,17 +751,25 @@ impl fmt::Display for ProtoMessage {
         if let Some(comment) = &self.comment {
             writeln!(f, "{}", format_comment(comment, 0))?;
         }
-        
+
         writeln!(f, "message {} {{", self.name)?;
-        
+
         // Write oneofs
         for oneof in &self.oneofs {
+            // Skip empty oneofs
+            if oneof.fields.is_empty() {
+                continue;
+            }
             writeln!(f, "  oneof {} {{", oneof.name)?;
             for field in &oneof.fields {
                 if let Some(comment) = &field.comment {
                     writeln!(f, "{}", format_comment(comment, 4))?;
                 }
-                write!(f, "    {} {} = {}", field.field_type, field.name, field.number)?;
+                write!(
+                    f,
+                    "    {} {} = {}",
+                    field.field_type, field.name, field.number
+                )?;
                 if let Some(json_name) = &field.json_name {
                     write!(f, " [json_name = \"{}\"]", json_name)?;
                 }
@@ -473,33 +777,33 @@ impl fmt::Display for ProtoMessage {
             }
             writeln!(f, "  }}")?;
         }
-        
+
         // Write regular fields
         for field in &self.fields {
             if field.oneof_name.is_some() {
                 continue; // Skip oneof fields, already written above
             }
-            
+
             if let Some(comment) = &field.comment {
                 writeln!(f, "{}", format_comment(comment, 2))?;
             }
-            
+
             write!(f, "  ")?;
             if field.repeated {
                 write!(f, "repeated ")?;
             } else if field.optional {
                 write!(f, "optional ")?;
             }
-            
+
             write!(f, "{} {} = {}", field.field_type, field.name, field.number)?;
-            
+
             if let Some(json_name) = &field.json_name {
                 write!(f, " [json_name = \"{}\"]", json_name)?;
             }
-            
+
             writeln!(f, ";")?;
         }
-        
+
         writeln!(f, "}}")?;
         Ok(())
     }
@@ -510,16 +814,16 @@ impl fmt::Display for ProtoEnum {
         if let Some(comment) = &self.comment {
             writeln!(f, "{}", format_comment(comment, 0))?;
         }
-        
+
         writeln!(f, "enum {} {{", self.name)?;
-        
+
         for value in &self.values {
             if let Some(comment) = &value.comment {
                 writeln!(f, "{}", format_comment(comment, 2))?;
             }
             writeln!(f, "  {} = {};", value.name, value.number)?;
         }
-        
+
         writeln!(f, "}}")?;
         Ok(())
     }
@@ -530,14 +834,14 @@ impl fmt::Display for ProtoService {
         if let Some(comment) = &self.comment {
             writeln!(f, "{}", format_comment(comment, 0))?;
         }
-        
+
         writeln!(f, "service {} {{", self.name)?;
-        
+
         for rpc in &self.rpcs {
             if let Some(comment) = &rpc.comment {
                 writeln!(f, "{}", format_comment(comment, 2))?;
             }
-            
+
             write!(f, "  rpc {}(", rpc.name)?;
             if rpc.client_streaming {
                 write!(f, "stream ")?;
@@ -548,7 +852,7 @@ impl fmt::Display for ProtoService {
             }
             writeln!(f, "{});", rpc.response_type)?;
         }
-        
+
         writeln!(f, "}}")?;
         Ok(())
     }
@@ -690,26 +994,32 @@ mod tests {
     #[test]
     fn test_object_to_message_conversion() {
         let resolver = create_test_resolver();
-        
+
         let obj = ObjectPrimitive {
             title: Some("Test Object".to_string()),
             description: Some("A test object".to_string()),
             summary: None,
             properties: {
                 let mut props = IndexMap::new();
-                props.insert("id".to_string(), Schema::Primitive(Primitive::Integer(IntegerPrimitive {
-                    title: None,
-                    description: Some("ID field".to_string()),
-                    minimum: Some(0),
-                    not: None,
-                })));
-                props.insert("name".to_string(), Schema::Primitive(Primitive::String(StringPrimitive {
-                    title: None,
-                    comment: None,
-                    description: Some("Name field".to_string()),
-                    r#enum: None,
-                    pattern: None,
-                })));
+                props.insert(
+                    "id".to_string(),
+                    Schema::Primitive(Primitive::Integer(IntegerPrimitive {
+                        title: None,
+                        description: Some("ID field".to_string()),
+                        minimum: Some(0),
+                        not: None,
+                    })),
+                );
+                props.insert(
+                    "name".to_string(),
+                    Schema::Primitive(Primitive::String(StringPrimitive {
+                        title: None,
+                        comment: None,
+                        description: Some("Name field".to_string()),
+                        r#enum: None,
+                        pattern: None,
+                    })),
+                );
                 props
             },
             required: vec!["id".to_string()],
@@ -717,17 +1027,19 @@ mod tests {
             not: None,
         };
 
-        let message = resolver.convert_object_to_message("TestObject", &obj).unwrap();
-        
+        let message = resolver
+            .convert_object_to_message("TestObject", &obj)
+            .unwrap();
+
         assert_eq!(message.name, "TestObject");
         assert_eq!(message.fields.len(), 2);
         assert_eq!(message.comment, Some("A test object".to_string()));
-        
+
         let id_field = &message.fields[0];
         assert_eq!(id_field.name, "id");
         assert_eq!(id_field.json_name, Some("id".to_string()));
         assert!(!id_field.optional); // Required field
-        
+
         let name_field = &message.fields[1];
         assert_eq!(name_field.name, "name");
         assert_eq!(name_field.json_name, Some("name".to_string()));
@@ -737,32 +1049,34 @@ mod tests {
     #[test]
     fn test_string_enum_conversion() {
         let resolver = create_test_resolver();
-        let values = vec!["pending".to_string(), "completed".to_string(), "failed".to_string()];
-        
-        let proto_enum = resolver.convert_string_enum_to_enum(
-            "Status",
-            &values,
-            Some("Status enumeration")
-        ).unwrap();
-        
+        let values = vec![
+            "pending".to_string(),
+            "completed".to_string(),
+            "failed".to_string(),
+        ];
+
+        let proto_enum = resolver
+            .convert_string_enum_to_enum("Status", &values, Some("Status enumeration"))
+            .unwrap();
+
         assert_eq!(proto_enum.name, "Status");
         assert_eq!(proto_enum.values.len(), 3);
         assert_eq!(proto_enum.comment, Some("Status enumeration".to_string()));
-        
-        assert_eq!(proto_enum.values[0].name, "PENDING");
+
+        assert_eq!(proto_enum.values[0].name, "STATUS_PENDING");
         assert_eq!(proto_enum.values[0].number, 0);
-        
-        assert_eq!(proto_enum.values[1].name, "COMPLETED");
+
+        assert_eq!(proto_enum.values[1].name, "STATUS_COMPLETED");
         assert_eq!(proto_enum.values[1].number, 1);
-        
-        assert_eq!(proto_enum.values[2].name, "FAILED");
+
+        assert_eq!(proto_enum.values[2].name, "STATUS_FAILED");
         assert_eq!(proto_enum.values[2].number, 2);
     }
 
     #[test]
     fn test_oneof_conversion() {
         let resolver = create_test_resolver();
-        
+
         let oneof = OneOf {
             title: Some("Union Type".to_string()),
             description: Some("A union of types".to_string()),
@@ -783,8 +1097,10 @@ mod tests {
             ],
         };
 
-        let message = resolver.convert_oneof_to_message("UnionType", &oneof).unwrap();
-        
+        let message = resolver
+            .convert_oneof_to_message("UnionType", &oneof)
+            .unwrap();
+
         assert_eq!(message.name, "UnionType");
         assert_eq!(message.oneofs.len(), 1);
         assert_eq!(message.oneofs[0].name, "value");
@@ -795,7 +1111,7 @@ mod tests {
     #[test]
     fn test_schema_to_proto_field_type() {
         let resolver = create_test_resolver();
-        
+
         // Test string
         let string_schema = Schema::Primitive(Primitive::String(StringPrimitive {
             title: None,
@@ -806,7 +1122,7 @@ mod tests {
         }));
         let field_type = resolver.schema_to_proto_field_type(&string_schema).unwrap();
         assert!(matches!(field_type, ProtoFieldType::String));
-        
+
         // Test integer
         let int_schema = Schema::Primitive(Primitive::Integer(IntegerPrimitive {
             title: None,
@@ -816,7 +1132,7 @@ mod tests {
         }));
         let field_type = resolver.schema_to_proto_field_type(&int_schema).unwrap();
         assert!(matches!(field_type, ProtoFieldType::Int64));
-        
+
         // Test boolean
         let bool_schema = Schema::Primitive(Primitive::Boolean(BooleanPrimitive {
             title: None,
@@ -824,7 +1140,7 @@ mod tests {
         }));
         let field_type = resolver.schema_to_proto_field_type(&bool_schema).unwrap();
         assert!(matches!(field_type, ProtoFieldType::Bool));
-        
+
         // Test reference
         let ref_schema = Schema::Ref(Reference {
             title: None,
@@ -840,4 +1156,4 @@ mod tests {
             panic!("Expected Message type");
         }
     }
-} 
+}
