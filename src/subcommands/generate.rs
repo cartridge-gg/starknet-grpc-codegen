@@ -114,10 +114,7 @@ lint:
   except:
     - FIELD_LOWER_SNAKE_CASE  # We use json_name for JSON compatibility
     - ENUM_VALUE_PREFIX      # We preserve original enum values
-build:
-  roots:
-    - .
-  excludes: []
+    - ENUM_ZERO_VALUE_SUFFIX # We preserve original enum values
 "#.to_string();
         
         let buf_path = output_path.join("buf.yaml");

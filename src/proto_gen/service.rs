@@ -105,7 +105,6 @@ impl<'a> ServiceGenerator<'a> {
         (client_streaming, server_streaming)
     }
 
-    #[allow(dead_code)]
     pub fn generate_request_response_messages(&self, method: &Method) -> Result<(ProtoMessage, ProtoMessage)> {
         let rpc_name = self.method_name_to_rpc_name(&method.name);
         let request_message = self.generate_request_message(&rpc_name, method)?;
@@ -114,7 +113,6 @@ impl<'a> ServiceGenerator<'a> {
         Ok((request_message, response_message))
     }
 
-    #[allow(dead_code)]
     fn generate_request_message(&self, rpc_name: &str, method: &Method) -> Result<ProtoMessage> {
         let mut fields = Vec::new();
         let mut field_number = 1u32;
@@ -148,7 +146,6 @@ impl<'a> ServiceGenerator<'a> {
         })
     }
 
-    #[allow(dead_code)]
     fn generate_response_message(&self, rpc_name: &str, method: &Method) -> Result<ProtoMessage> {
         let mut fields = Vec::new();
 
@@ -190,7 +187,6 @@ impl<'a> ServiceGenerator<'a> {
         })
     }
 
-    #[allow(dead_code)]
     fn schema_to_proto_field_type(&self, schema: &Schema) -> Result<ProtoFieldType> {
         schema_to_proto_field_type_impl(schema)
     }
@@ -222,10 +218,10 @@ impl<'a> ServiceGenerator<'a> {
                 },
                 ProtoField {
                     name: "data".to_string(),
-                    field_type: ProtoFieldType::Any,
+                    field_type: ProtoFieldType::String,
                     number: 3,
                     json_name: Some("data".to_string()),
-                    comment: Some("Additional error data".to_string()),
+                    comment: Some("Additional error data as JSON string".to_string()),
                     optional: true,
                     repeated: false,
                     oneof_name: None,
@@ -241,7 +237,6 @@ impl<'a> ServiceGenerator<'a> {
 }
 
 // Helper function to resolve the recursion issue
-#[allow(dead_code)]
 fn schema_to_proto_field_type_impl(schema: &Schema) -> Result<ProtoFieldType> {
     match schema {
         Schema::Primitive(primitive) => match primitive {
@@ -259,15 +254,56 @@ fn schema_to_proto_field_type_impl(schema: &Schema) -> Result<ProtoFieldType> {
                 // Return the inner type - the repeated flag will be set separately
                 schema_to_proto_field_type_impl(&array.items)
             }
-            Primitive::Object(_) => Ok(ProtoFieldType::Message("Object".to_string())),
+            Primitive::Object(_) => Ok(ProtoFieldType::Message("starknet.v0_8_1.common.Object".to_string())),
         },
         Schema::Ref(reference) => {
             let ref_name = reference.name();
-            let proto_type_name = to_proto_type_name(ref_name);
-            Ok(ProtoFieldType::Message(proto_type_name))
+            
+            // Handle common type aliases that should map to primitive types
+            match ref_name {
+                "FELT" | "TXN_HASH" | "BLOCK_HASH" | "ADDRESS" | "CLASS_HASH" | "STORAGE_KEY" | "HASH_256" => {
+                    Ok(ProtoFieldType::String)
+                }
+                "BLOCK_NUMBER" | "NUM_AS_HEX" | "L1_TXN_HASH" => {
+                    Ok(ProtoFieldType::Uint64)
+                }
+                "u64" => {
+                    Ok(ProtoFieldType::Uint64)
+                }
+                "u128" => {
+                    Ok(ProtoFieldType::String) // Use string for large integers
+                }
+                "ETH_ADDRESS" => {
+                    Ok(ProtoFieldType::String)
+                }
+                // Handle generic object types
+                "Object" => {
+                    // Try to determine what kind of object this should be based on context
+                    // For now, we'll use a generic Object type, but this should be improved
+                    Ok(ProtoFieldType::Message("starknet.v0_8_1.common.Object".to_string()))
+                }
+                // Handle cross-service type references
+                "NestedCall" | "NESTED_CALL" => {
+                    Ok(ProtoFieldType::Message("starknet.v0_8_1.common.FunctionInvocation".to_string())) // NestedCall is an alias for FunctionInvocation
+                }
+                "BroadcastedInvokeTxn" | "BROADCASTED_INVOKE_TXN" | "BROADCASTED_INVOKE_TXN_V3" => {
+                    Ok(ProtoFieldType::Message("starknet.v0_8_1.common.InvokeTxnV3Content".to_string())) // Map to the actual content type
+                }
+                "BroadcastedDeclareTxn" | "BROADCASTED_DECLARE_TXN" | "BROADCASTED_DECLARE_TXN_V3" => {
+                    Ok(ProtoFieldType::Message("starknet.v0_8_1.common.DeclareTxnV3Content".to_string())) // Map to the actual content type
+                }
+                "BroadcastedDeployAccountTxn" | "BROADCASTED_DEPLOY_ACCOUNT_TXN" | "BROADCASTED_DEPLOY_ACCOUNT_TXN_V3" => {
+                    Ok(ProtoFieldType::Message("starknet.v0_8_1.common.DeployAccountTxnV3Content".to_string())) // Map to the actual content type
+                }
+                // For other references, treat as message types with qualified names
+                _ => {
+                    let proto_type_name = to_proto_type_name(ref_name);
+                    Ok(ProtoFieldType::Message(format!("starknet.v0_8_1.common.{}", proto_type_name)))
+                }
+            }
         }
-        Schema::OneOf(_) => Ok(ProtoFieldType::Any),
-        Schema::AllOf(_) => Ok(ProtoFieldType::Message("AllOf".to_string())),
+        Schema::OneOf(_) => Ok(ProtoFieldType::Message("starknet.v0_8_1.common.Object".to_string())),
+        Schema::AllOf(_) => Ok(ProtoFieldType::Message("starknet.v0_8_1.common.AllOf".to_string())),
     }
 }
 
@@ -502,7 +538,7 @@ mod tests {
         
         let data_field = &error_message.fields[2];
         assert_eq!(data_field.name, "data");
-        assert!(matches!(data_field.field_type, ProtoFieldType::Any));
+        assert!(matches!(data_field.field_type, ProtoFieldType::String));
         assert!(data_field.optional);
     }
 

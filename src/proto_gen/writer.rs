@@ -209,11 +209,9 @@ mod tests {
     #[test]
     fn test_proto_writer_with_imports() {
         let mut writer = ProtoWriter::new("test.package");
-        writer.add_import("google/protobuf/any.proto");
         writer.add_import("google/protobuf/timestamp.proto");
         
         let output = writer.to_string();
-        assert!(output.contains("import \"google/protobuf/any.proto\";"));
         assert!(output.contains("import \"google/protobuf/timestamp.proto\";"));
     }
 
@@ -352,7 +350,6 @@ mod tests {
         let mut writer = ProtoWriter::new("starknet.v0_1_0.main");
         
         // Add imports
-        writer.add_import("google/protobuf/any.proto");
         writer.add_import("starknet/v0_1_0/common.proto");
         
         // Add enum

@@ -93,7 +93,6 @@ impl ProtoGenerator {
         let mut writer = ProtoWriter::new(&self.config.common_package());
         
         // Add common imports for better language compatibility
-        writer.add_import("google/protobuf/any.proto");
         writer.add_import("google/protobuf/timestamp.proto");
         writer.add_import("google/protobuf/duration.proto");
         writer.add_import("google/protobuf/empty.proto");
@@ -114,12 +113,23 @@ impl ProtoGenerator {
     
     fn generate_main_service_proto(&self, specs: &Specification, type_resolution: &TypeResolution) -> Result<String> {
         let mut writer = ProtoWriter::new(&self.config.main_package());
-        writer.add_import(&format!("{}/common.proto", self.config.version));
+        writer.add_import("common.proto");
         
-        let service = ServiceGenerator::new("StarknetMainService", &self.config)
-            .generate_from_methods(&self.filter_main_methods(&specs.methods))?;
+        let methods = self.filter_main_methods(&specs.methods);
+        let service_generator = ServiceGenerator::new("StarknetMainService", &self.config);
+        let service = service_generator.generate_from_methods(&methods)?;
         
         writer.add_service(&service);
+        
+        // Generate request/response messages for each method
+        for method in &methods {
+            let (request_msg, response_msg) = service_generator.generate_request_response_messages(method)?;
+            writer.add_message(&request_msg);
+            writer.add_message(&response_msg);
+        }
+        
+        // Add common error message
+        writer.add_message(&ServiceGenerator::generate_error_message());
         
         // Add service-specific types
         for proto_type in &type_resolution.main_types {
@@ -131,12 +141,23 @@ impl ProtoGenerator {
     
     fn generate_write_service_proto(&self, specs: &Specification, type_resolution: &TypeResolution) -> Result<String> {
         let mut writer = ProtoWriter::new(&self.config.write_package());
-        writer.add_import(&format!("{}/common.proto", self.config.version));
+        writer.add_import("common.proto");
         
-        let service = ServiceGenerator::new("StarknetWriteService", &self.config)
-            .generate_from_methods(&self.filter_write_methods(&specs.methods))?;
+        let methods = self.filter_write_methods(&specs.methods);
+        let service_generator = ServiceGenerator::new("StarknetWriteService", &self.config);
+        let service = service_generator.generate_from_methods(&methods)?;
         
         writer.add_service(&service);
+        
+        // Generate request/response messages for each method
+        for method in &methods {
+            let (request_msg, response_msg) = service_generator.generate_request_response_messages(method)?;
+            writer.add_message(&request_msg);
+            writer.add_message(&response_msg);
+        }
+        
+        // Add common error message
+        writer.add_message(&ServiceGenerator::generate_error_message());
         
         // Add service-specific types
         for proto_type in &type_resolution.write_types {
@@ -148,12 +169,23 @@ impl ProtoGenerator {
     
     fn generate_trace_service_proto(&self, specs: &Specification, type_resolution: &TypeResolution) -> Result<String> {
         let mut writer = ProtoWriter::new(&self.config.trace_package());
-        writer.add_import(&format!("{}/common.proto", self.config.version));
+        writer.add_import("common.proto");
         
-        let service = ServiceGenerator::new("StarknetTraceService", &self.config)
-            .generate_from_methods(&self.filter_trace_methods(&specs.methods))?;
+        let methods = self.filter_trace_methods(&specs.methods);
+        let service_generator = ServiceGenerator::new("StarknetTraceService", &self.config);
+        let service = service_generator.generate_from_methods(&methods)?;
         
         writer.add_service(&service);
+        
+        // Generate request/response messages for each method
+        for method in &methods {
+            let (request_msg, response_msg) = service_generator.generate_request_response_messages(method)?;
+            writer.add_message(&request_msg);
+            writer.add_message(&response_msg);
+        }
+        
+        // Add common error message
+        writer.add_message(&ServiceGenerator::generate_error_message());
         
         // Add service-specific types
         for proto_type in &type_resolution.trace_types {
@@ -165,12 +197,23 @@ impl ProtoGenerator {
     
     fn generate_ws_service_proto(&self, specs: &Specification, type_resolution: &TypeResolution) -> Result<String> {
         let mut writer = ProtoWriter::new(&self.config.ws_package());
-        writer.add_import(&format!("{}/common.proto", self.config.version));
+        writer.add_import("common.proto");
         
-        let service = ServiceGenerator::new("StarknetWsService", &self.config)
-            .generate_from_methods(&self.filter_ws_methods(&specs.methods))?;
+        let methods = self.filter_ws_methods(&specs.methods);
+        let service_generator = ServiceGenerator::new("StarknetWsService", &self.config);
+        let service = service_generator.generate_from_methods(&methods)?;
         
         writer.add_service(&service);
+        
+        // Generate request/response messages for each method
+        for method in &methods {
+            let (request_msg, response_msg) = service_generator.generate_request_response_messages(method)?;
+            writer.add_message(&request_msg);
+            writer.add_message(&response_msg);
+        }
+        
+        // Add common error message
+        writer.add_message(&ServiceGenerator::generate_error_message());
         
         // Add service-specific types
         for proto_type in &type_resolution.ws_types {
