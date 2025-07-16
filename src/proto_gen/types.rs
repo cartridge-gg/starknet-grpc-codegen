@@ -1151,7 +1151,7 @@ mod tests {
         });
         let field_type = resolver.schema_to_proto_field_type(&ref_schema).unwrap();
         if let ProtoFieldType::Message(type_name) = field_type {
-            assert_eq!(type_name, "Felt");
+            assert_eq!(type_name, "starknet.v0_1_0.common.Felt");
         } else {
             panic!("Expected Message type");
         }
