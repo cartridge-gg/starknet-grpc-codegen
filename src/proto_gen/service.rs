@@ -594,7 +594,7 @@ mod tests {
         });
         let field_type = generator.schema_to_proto_field_type(&ref_schema).unwrap();
         if let ProtoFieldType::Message(type_name) = field_type {
-            assert_eq!(type_name, "Block");
+            assert_eq!(type_name, "starknet.v0_1_0.common.Block");
         } else {
             panic!("Expected Message type");
         }
