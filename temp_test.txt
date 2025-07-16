@@ -1,0 +1,2 @@
+    #[clap(about = "Run round-trip tests")]
+    Test(Test),

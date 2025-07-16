@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::{
     spec::Specification,
-    subcommands::{Generate, Print},
+    subcommands::{Generate, Print, Test},
 };
 
 mod spec;
@@ -29,6 +29,8 @@ enum Subcommands {
     Generate(Generate),
     #[clap(about = "Print the spec to standard output")]
     Print(Print),
+    #[clap(about = "Run round-trip tests")]
+    Test(Test),
 }
 
 #[derive(Debug, Clone)]
@@ -246,6 +248,7 @@ fn main() {
     let result = match cli.command {
         Subcommands::Generate(cmd) => cmd.run(&profiles),
         Subcommands::Print(cmd) => cmd.run(&profiles),
+        Subcommands::Test(cmd) => cmd.run(),
     };
 
     result.expect("Error running commmand");
